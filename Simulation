@@ -1,0 +1,28 @@
+import pandas as pd
+import numpy as np
+from glob import glob
+import os
+
+from IPython.core.interactiveshell import InteractiveShell
+InteractiveShell.ast_node_interactivity = "all"
+import warnings
+warnings.filterwarnings('ignore')
+# Imports for math package
+from scipy.stats import rankdata
+from scipy.stats import moment as ts_moment
+from functools import reduce
+from dateutil.relativedelta import relativedelta 
+from datetime import datetime
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+import statsmodels.api as sm
+import seaborn as sns
+
+save_folder = ''
+
+files  = os.listdir(save_folder)
+for fle in files:
+    if ".pkl" in fle:
+        var = fle.replace(".pkl",'')
+#         print var
+        vars()[var] = pd.read_pickle(save_folder+fle).loc["2014":]
