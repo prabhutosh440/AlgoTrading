@@ -26,3 +26,748 @@ for fle in files:
         var = fle.replace(".pkl",'')
 #         print var
         vars()[var] = pd.read_pickle(save_folder+fle).loc["2014":]
+        
+# CUSTOM FUNCTION
+
+# Frame work for functions to be vectorized
+
+def custom_function(func,series):
+    
+    if isinstance(series,pd.core.series.Series):
+        ind = series.index
+        col = series.name
+        arr = series.values
+#         arr = arr.argsort().argsort()
+        arr = func(series)
+        return pd.Series(arr,index=ind,name=col)
+    
+    if isinstance(series,np.ndarray):
+        arr = func(series) #series.argsort().argsort()
+        return arr
+    
+    if isinstance(series,pd.core.frame.DataFrame):
+        ind = series.index
+        cols = series.columns
+        series = series.values
+        series = np.apply_along_axis(func,1,series)
+        if series.ndim==1 and len(cols)>1:
+            series = np.repeat(series.reshape(-1,1),repeats=len(cols),axis=1)
+        return pd.DataFrame(series,index=ind,columns=cols)
+
+# RANK: Most common operation
+
+def RANK(series):
+    '''Function returns the rank of the all cross
+    sectional assets. Rank Starts from 1 being lowest.
+    Nan values,inf,-inf are not assigned any value.
+  
+    '''
+    if series is None:
+        return None
+    
+    if isinstance(series,pd.core.series.Series):
+        return series.replace([-np.inf,np.inf],np.nan).rank(pct=True)
+        
+    if isinstance(series,pd.core.frame.DataFrame):
+        return series.replace([-np.inf,np.inf],np.nan).rank(axis=1,pct=True)
+
+def _rank(series,element=-1):
+    '''rank of all elements
+    first  if element = 0, or 
+    last   if element = -1
+    '''
+    isnull = np.isnan(series)
+    series = rankdata(series)
+    series[isnull] = np.nan    
+    return (series/max(series))[element]
+
+def TS_RANK(series,days_trailing):
+    '''
+    Time Series rank for each asset. Rank Starts from
+    1 being lowest
+    '''
+    #TODO: Function is not exaclty as intended. Have to go through
+    # pandas Cython code to make it work faster. # WFlater
+    return series.rolling(days_trailing).apply(_rank,raw=True)
+
+# Mathematical operations
+
+def _zscore(arr):
+    '''function always for the array'''
+    return (arr-np.nanmean(arr))/np.nanstd(arr)
+
+def TS_ZSCORE(series,days_trailing):
+    '''
+    The function gives the rolling zscore for the
+    trailing days
+    '''
+    return (series-series.rolling(days_trailing).mean())/series.rolling(days_trailing).std()
+
+def ZSCORE(series):
+    '''cross sectional ZSCORE '''
+    return custom_function(_zscore,series)
+
+def _winsorize(series,axis=0):
+    '''The function uses robust statistics to winsorize a series
+    '''
+    if isinstance(series,pd.core.series.Series) or isinstance(series,np.ndarray)  :
+        median = np.nanmedian(series)
+        robust_std = 1.4826*np.nanmedian((np.abs((series-median))))
+        upper = median + 4*robust_std
+        lower = median - 4*robust_std
+        series[series>upper] = upper
+        series[series<lower] = lower
+        return series
+    
+    if isinstance(series,pd.core.frame.DataFrame):
+        arr = series.values
+        arr = np.apply_along_axis(_winsorize,axis,arr)
+        return pd.DataFrame(arr,index=series.index,columns=series.columns)    
+    
+def WINSORIZE(series):
+    '''winsorize the values.
+       removes cross sectional outliers
+    '''
+    return _winsorize(series,1)
+
+# def TS_WINSORIZE(series,days_trailing): 
+# Re - asses why would one need time series winsorize ? and does that make sense?
+#     '''winsorize the values for past n days'''
+#     return series.rolling(days_trailing).apply(lambda x:_winsorize(x),raw=False)
+
+def MAX(*args):
+    if len(args)==1:
+        return custom_function(np.nanmax,args)
+    return np.maximum(*args)
+
+# def MAX(series):
+#     return custom_function(np.nanmax,series)
+
+def TS_MAX(series,days_trailing):
+    return series.rolling(days_trailing).max()
+
+def MIN(*args):
+    if len(args)==1:
+        return custom_function(np.nanmin,args)
+    return np.minimum(*args)
+
+def TS_MIN(series,days_trailing):
+    return series.rolling(days_trailing).min()
+
+# def STDDEV(series):
+#     return series.std()
+# Normal Std does not make sense to be provided? 
+# come back later!!
+
+def TS_STDDEV(series,days_trailing):
+    return series.rolling(days_trailing).std()
+
+def MEAN(series):
+    return custom_function(np.nanmean,series)
+
+def MA(series,days_trailing): # Moving AVERAGE / OR COULD HAVE BEEN CALLED TS_MEAN
+    return series.rolling(days_trailing).mean()
+
+def MEDIAN(series):
+    return custom_function(np.nanmedian,series)
+
+def TS_MEDIAN(series,days_trailing): 
+    return series.rolling(days_trailing).median()
+    
+def CORRELATION(series1,series2,days_trailing,method):
+    '''series1 correlation with series2 for each instrument
+    for trailing 
+    Method 1: for pearson correlation
+    Method 2: for spearman (rank) correlation
+    '''
+    if not np.all(series1.columns == series1.columns):
+        return 1 
+    if method==1:
+        return series1.rolling(days_trailing).corr(series2)
+    if method==2:
+        return TS_RANK(series1,days_trailing).rolling(days_trailing).corr(TS_RANK(series2,days_trailing))
+    
+def COVARIANCE(series1,series2,days_trailing):
+    '''Covariance of the values in vectors x and y for the past n days.
+    Defined as cov = pearson_correlation*std1*std2'''
+    return CORRELATION(series1,series2,days_trailing,1)*TS_STDDEV(series1,days_trailing)*TS_STDDEV(series2,days_trailing)    
+
+def DELAY(series,days_trailing):
+    return series.shift(days_trailing)
+
+def DELTA(series,days_trailing):
+    '''Time series function'''
+    return series.diff(days_trailing)
+
+def SUM(series,days_trailing):
+    return series.rolling(days_trailing).sum()
+
+def PRODUCT(series,days_trailing):
+    return series.rolling(days_trailing).apply(np.prod)
+
+def LOG(series):
+    '''The function returns the natural log '''
+    return np.log(series)
+
+def SIGN(series):
+    '''Returns 1 if x> 0,-1 if x<0,0 if x==0 '''
+    return np.sign(series)
+
+def TS_KURTOSIS(series,days_trailing):
+    '''compute the kurtosis of x on the last n days'''
+    return series.rolling(days_trailing).kurt()
+
+def TS_SKEWNESS(series,days_trailing):
+    '''compute the skewness of x on the last n days'''
+    return series.rolling(days_trailing).skew()
+
+def TS_MOMENT(series,days_trailing,moment):
+    '''compute the kth central momemt of x on the last n days'''
+    ## TODO: WORKS BUT SLOW CAN LATER LOOK INTO MORE ROBUST AND FASTER VERSION
+    return series.rolling(days_trailing).apply(lambda x:ts_moment(x,axis=0,nan_policy='omit',moment=moment),raw=True)
+
+def SIGNEDPOWER(series,power):
+    '''sign(x)*Abs(x)^e'''
+    # Is non negative and float power a valid operation?
+    return series.pow(power)
+
+def ABS(series):
+    '''Absolute value'''
+    return series.abs()
+
+def COUNTNANS(series,days_trailing):
+    '''Number of NaN (Not-a-Number) values in vector x for the past n
+        days. Note that n must be less than 256.E.g.: CountNans((closeopen)^
+        0.5, 22)If (close > open) then (close - open)^0.5 is not
+        NaN.else if (close < open) then (close - open)^0.5 is NaN.So,
+        basically the above code counts how many times close is less than
+        open, in the past 22 days.'''
+    return (days_trailing-series.rolling(days_trailing).count())
+
+def SCALE(series):
+    '''Scale alpha x so that its Book size is 1, i.e., the sum of abs(x) over
+        all instruments is 1. To scale to a different book size, say 1000, use
+        Scale(x) * 1000.'''
+    return series.divide(series.abs().sum(1),axis=0)
+
+def WHERE(expr,true_expr,false_expr):
+    '''
+    If expr is true, true_expr; else false_expr. 
+    For example, WHERE(CLOSE<OPEN,CLOSE,OPEN)
+    '''
+    #TODO: the function depends on existence of pandas data frame RETURN for index
+    # and columns name . this problem could also be generalized by using common
+    # headers and index # maybe expr will always be the pandas dataframe you could use that
+    # think about it. THINK!
+    return pd.DataFrame(np.where(expr,true_expr,false_expr),index=expr.index,columns=expr.columns)
+
+def PASTEURIZE(series):
+    return series.replace([-np.inf,np.inf],np.nan)
+
+def INDNEUTRALIZE(series,grouping):
+    '''
+    Neutralize alpha x against groupings specified
+    grouping 1: market
+    grouping 2: Industry
+    grouping 3: Sub-Industry
+    grouping 4: Sector    
+    
+    alpha = alpha - mean(alpha)
+    '''
+    global industry # should be present for industry
+    if grouping ==1:
+        return series.sub(series.mean(1),axis=0)  
+    if grouping==2:
+        RET = series.copy()
+        df_ret = []
+        for ind in list(industry.keys()):
+            df_ret.append(INDNEUTRALIZE(RET.filter(industry[ind]),1))
+        return pd.concat(df_ret,axis=1).filter(series)
+    return series
+
+def _STEP(step):
+    return np.array(range(1,step+1))
+
+def STEP(series,step,function):
+    '''
+    ## TODO Include dot string and make the idea more generic if possible
+    SUM if function  = 1
+    MEAN if function = 2
+    MAX if function  = 3
+    MIN if function  = 4
+    PROD if function = 5
+    
+    NOTE
+    -----------------
+    -----------------
+    If you wish to implement linear decay
+    just refer LINEAR_DECAY function
+    '''
+    if function ==1:
+        return series.rolling(step).apply(lambda x:(x*_STEP(step)).sum(),raw=True)
+    if function ==2:
+        return series.rolling(step).apply(lambda x:(x*_STEP(step)).mean(),raw=True)
+    if function ==3:
+        return series.rolling(step).apply(lambda x:(x*_STEP(step)).max(),raw=True)
+    if function ==4:
+        return series.rolling(step).apply(lambda x:(x*_STEP(step)).min(),raw=True)
+    if function ==5:
+        return series.rolling(step).apply(lambda x:(x*_STEP(step)).prod(),raw=True)
+    return 'Invalid argument passed for step operation'    
+        
+def SUM_I(expr,var,start,stop,step):
+    '''Loop over var (from start to stop with step) and calculate expr at Scalar
+    start, stop, step) every iteration (presumably expr would contain var), then sum
+    over all the values. 
+    For example:Sum_i(Delay(close, i)*i, i, 2, 4, 1) would be equivalent to 
+    Delay(close, 2)*2 + Delay(close, 3)*3 + Delay(close, 4)*4
+    
+    CAVET: expr and var arguments have to be in string ## FIND IF THERE is other way around
+    SUM_i('DELAY(CLOSE,i)','i',2,4,1) == DELAY(CLOSE*2)*2 + DELAY(CLOSE*3)*3 + DELAY(CLOSE,4)*4
+    
+    EXAMPLE:
+    ------------------
+    ------------------
+    SUM_i('DELAY(PRODUCT(1+RETURN,i)-1,i)','i',2,10,2)
+    '''
+    df_list  = eval('[{expr} for {var} in range({start},{stop}+1,{step})]'.format(expr=expr,
+                                                        var=var,start=start,stop=stop,step=step))
+    return reduce(lambda x, y: x.add(y, fill_value=0), df_list)
+
+
+def CALL_I(expr,var,subexpr):
+    '''
+    Substitute subexpr for var in expr, and then evaluate expr. For
+    example, Call_i(x + 4, x, 2 + 3) would be equivalent to (2 + 3) + 4
+    
+    Cavet
+    ---------------------
+    ---------------------
+    The expression , variable and subexpr all have to in string 
+    literals. 
+    
+    
+    Example 
+    ---------------------
+    ---------------------
+    Idea Use TS_RANK(x,5) as stock weights where x is daily close
+    price if it's higher than high, or orthwerwise use daily high 
+    price as stock weights.
+    
+    CALL_I('TS_RANK(x,5)','x','WHERE(CLOSE>HIGH,CLOSE,HIGH)')
+    
+    '''
+    return eval(expr.replace(var,str(subexpr)))
+
+def TAIL(expr,lower,upper,newval):
+    '''
+    Set the values of expr to newval if they are
+    between lower and upper.
+    
+    Example 
+    ----------------
+    ----------------
+    IDea :-
+        Use close/High ratio as stock weights if it is less than 0.9 or
+    greater than 1.1, or otherwise use 1 as stock weights.
+    
+    Mathematical Expression:-
+    
+    TAIL(CLOSE/HIGH,.9,1.1,1)
+    
+    '''
+    return WHERE((expr>lower)&(expr<upper),newval,expr)
+
+
+def DECAY_LINEAR(series,days_trailing):
+    '''
+    Linear decay function over the past n days.Decay_linear(x, n) =
+    (x[date] * n + x[date - 1] * (n - 1) + … + x[date – n - 1]) / (n + (n -
+    1) + … + 1)
+    '''
+    return STEP(series,days_trailing,1)/np.sum(_STEP(days_trailing))
+
+def DECAY_EXP(series,days_trailing,factor):
+    '''
+    Exponential decay function over the past n days, where f is the
+    smoothing factor. Here f is the smoothing factor and can be
+    assigned a value that’s less than 1.Decay_exp(x, f, n) = (x[date] +
+    x[date - 1] * f + … +x[date – n - 1] * (f ^ (n – 1))) / (1 + f + … + f
+    ^ (n - 1))
+    '''
+    multiplier = np.power(factor,np.arange(days_trailing-1,-1,-1)) 
+    
+    return series.rolling(days_trailing).apply(lambda x:(x*multiplier).sum(),raw=True)/sum(multiplier)
+
+    
+    ## include all functions in .__all__ list and then import all of them
+
+
+# Analysis Functions
+
+def IC(series1,series2):
+    '''
+    The function returns the daily
+    IC for the alpha.
+    This implementation of IC is
+    valid for cross sectional bets
+    at a given time.
+    
+    Parameters
+    ----------------
+    ----------------
+    series1 and series2 are dataframes
+    with index as time stamp and columns as individual
+    equity (should be common).
+    
+    Returns
+    ----------------
+    ----------------
+    pandas series 
+    '''
+    return (series1.T).corrwith((series2.T),axis=0)
+
+def get_sharpe_ratio(daily_returns,startDate=None,endDate=None):
+    '''the function returns a scalar value which is the sharpe ratio
+    for the mentioned period.
+    uses a global variable rfr
+    '''
+#     global rfr # rfr would be pandas series
+
+    if startDate is None:
+        startDate = daily_returns.index.min()
+    if endDate is None:
+        endDate = daily_returns.index.max()
+    _daily_returns =  daily_returns.loc[startDate:endDate]
+    sharpe = (_daily_returns.mean()/_daily_returns.std())*pd.np.sqrt(252)
+    return sharpe
+
+def cumulative_return_series(daily_returns,startDate=None,endDate=None):
+    '''
+    Function returns the cumulative return series from daily return series
+    in between startDate and endDate,
+    '''
+    if startDate is not None and endDate is not None:
+        return ((1+daily_returns.loc[startDate:endDate]).cumprod())-1
+    return ((1+daily_returns).cumprod())-1
+ 
+
+def alpha_daily_return(alpha,returns):
+    '''
+    the function returns the portfolio return
+    for the alpha.
+    alpha is the dataframe with each security weights
+    and returns is the RETRUN equivalent data frame
+    for each security daily return
+    '''
+    return returns.multiply(alpha,axis=0).sum(axis=1)
+
+
+def get_turnover(alpha):
+    '''
+    The function returns the one way turnover.
+    The turnover is half of the sum of the absolute
+    values of the difference between each position
+    at time t and time t-1.
+    '''
+    return np.round(100*(alpha.diff().abs().sum(1)/2).sum()/len(alpha),2)
+
+def get_days_profitable(daily_returns):
+    '''
+    The function returns the percentage profitable days for
+    the strategy.
+    '''
+    return np.round((daily_returns[daily_returns>0].count()*1.0/len(daily_returns))*100,2)
+
+def get_drawdown_series(daily_returns):
+    '''
+    The function returns the drawdwon series for the strategy.
+    
+    Definition
+    --------------
+    --------------
+    Drawdown Series  = Cumulative Return Series - Max. Running
+    Cumulative Return 
+    
+    For Maximum drawdown scaler
+    Just take the min of the drawdown series
+    '''
+    ret = ((daily_returns+1).cumprod())
+    drawdown = ((ret - ret.cummax())/ret.cummax())
+#     running_max = np.maximum.accumulate(cumulative_return)
+#     drawdown = cumulative_return-running_max 
+    return drawdown.min()
+
+def get_information_ratio(daily_returns):
+    '''
+    The function returns the Information ratio
+    for the daily return series.
+    
+    Definition
+    ----------------
+    ----------------
+    
+    IC = (avg daily return)/(daily volatility)*sqrt(252)
+    '''
+    try:
+        return (daily_returns.mean()/daily_returns.std())*np.sqrt(252)
+    except ZeroDivisionError:
+        return np.nan
+
+def cumulative_return(daily_returns,startDate=None,endDate=None):
+    ''' the function returns the cumulative return for the 
+    period as passed to the function.
+    if startDate and endDate is missing, YTD return is return'''
+#     if startDate is None:
+#         startDate = daily_returns.index.min()
+#     if endDate is None:
+#         endDate = daily_returns.index.max()
+#     no_of_days = len(daily_returns.loc[startDate:endDate].index)
+#     ann_fac = 252.0/no_of_days
+#     return (((1+daily_returns.loc[startDate:endDate]).prod())**ann_fac-1)
+    return (daily_returns+1).prod()-1
+
+def get_volatility(daily_returns,startDate=None,endDate=None):
+    '''
+    Function returns a scalar number which is the
+    annualized volatility for the period given.
+    '''
+    if startDate is None:
+        startDate = daily_returns.index.min()
+    if endDate is None:
+        endDate = daily_returns.index.max()
+    
+    try:
+        return ((daily_returns.loc[startDate:endDate].std()))*np.sqrt(256)
+    except ZeroDivisionError:
+        return np.nan
+
+
+def return_statistics(daily_returns):
+    '''
+    The function returns a pandas series with these return 
+    statistics
+    # Return 1M, 2M , 3M, 6M, 12 M , 2 yr, 3 yr, 5 yr , YTD
+    '''
+    startDate = daily_returns.index.min()
+    endDate = daily_returns.index.max()
+    return_statistics = {}
+    return_statistics['1M'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(1*22))
+    return_statistics['2M'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(2*22))
+    return_statistics['3M'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(3*22))
+    return_statistics['6M'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(6*22))
+    return_statistics['1Y'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(1*12*22))
+    return_statistics['2Y'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(2*12*22))
+    return_statistics['3Y'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(3*12*22))
+    return_statistics['5Y'] = cumulative_return(daily_returns,startDate=endDate-pd.offsets.BDay(5*12*22))
+    return_statistics['YTD'] = cumulative_return(daily_returns)
+    return pd.Series(return_statistics,name='Returns').to_frame()
+
+
+def complete_stats(daily_returns,raw_returns,alpha):
+    '''
+    function returns a portfolio series for
+    the daily return series including columns.
+    Ann. Return | I.R | Sharpe Ratio | Max. Drawdown | % Profitable Days
+    | Ann. Volatility | Avg. Daily Turnover
+    
+    ##TODO: Addition of, IC information coefficient c/s
+    correlation of wts and returns for a date
+    
+    '''
+    complete_stats = {}
+    complete_stats['Annual Return'] = cumulative_return(daily_returns)*100
+    complete_stats['Mean Annual Return'] = daily_returns.mean()*100*252    
+    complete_stats['Information Ratio'] = get_information_ratio(daily_returns)
+    complete_stats['Information Coefficient'] = IC(raw_returns,alpha).mean() # mean ic for the year    
+    complete_stats['Sharpe Ratio'] = get_sharpe_ratio(daily_returns)
+    complete_stats['Max Drawdown'] = get_drawdown_series(daily_returns)*100
+    complete_stats['% Profitable Days'] = get_days_profitable(daily_returns)
+    complete_stats['Annual Volatility'] = get_volatility(daily_returns)*100
+    complete_stats['Average Daily Turnover'] = get_turnover(alpha)
+    return pd.Series(complete_stats)
+    
+def generate_stats_table(daily_returns,returns,alpha):
+    '''
+    Function returns the dataframe with yearly stats
+    as required for evaluation of the alpha.
+    ## TODO is to add IC for each year
+    ## TODO could add a month grouper also.
+    '''
+    returns_grouper = daily_returns.groupby(pd.Grouper(freq='Y'))
+    alpha_grouper = alpha.groupby(pd.Grouper(freq='Y'))
+    raw_return_grouper = returns.groupby(pd.Grouper(freq='Y')) # returns is a data frame
+    df_list = []
+    for yrly_return,yrly_raw_return,yrly_alpha in zip(returns_grouper,raw_return_grouper,alpha_grouper):
+        df_list.append(complete_stats(yrly_return[1],yrly_raw_return[1],yrly_alpha[1]).to_frame('{}'.format(yrly_return[0].year)).T)
+    df_list.append(complete_stats(daily_returns,returns,alpha).to_frame('YTD').T)
+    return pd.concat(df_list,axis=0)
+
+def rolling_sharpe_series(daily_returns):
+    '''
+    The function returns the pandas series which 
+    has rolling one year sharpe.
+    '''
+    rolling_sharpe = daily_returns.rolling(252,min_periods=40).apply(get_information_ratio)
+    rolling_sharpe.name = 'Sharpe'
+    return rolling_sharpe
+
+def plot_return_sharpe(daily_returns):
+    '''Function returns the plot with 
+       cumulative returns and sharpe ratio
+    '''
+    data_plot = pd.concat([rolling_sharpe_series(daily_returns),cumulative_return_series(daily_returns)],
+                          keys= ['Sharpe','Return'],axis=1)
+    
+    data_plot.plot.line(figsize=(12,8),grid=True,fontsize=12,
+                       color=['k','b']).set(title='Cumulative Return')
+
+def plot_return_sharpe_cumsum(daily_returns):
+    '''Function returns the plot with 
+       cumulative returns and sharpe ratio
+    '''
+
+#     data_plot = pd.concat([rolling_sharpe_series(daily_returns),daily_returns.cumsum()],
+#                           keys= ['Sharpe','Return'],axis=1)
+    
+#     data_plot.plot.line(figsize=(12,8),grid=True,fontsize=12,
+#                        color=['k','b']).set(title='Cumulative Return')
+    
+    (((1+daily_returns).cumprod()-1)*100+100).plot.line(figsize=(12,8),grid=True,fontsize=12,
+                       color=['b']).set(title='Cumulative Return')
+
+def regression(x,y,intercept=True):
+    '''
+    intercept True i.e. intercept needs to be added
+    '''
+    if intercept:
+        x = sm.add_constant(x)
+    return sm.OLS(endog=y,exog=x,missing='drop').fit()    
+    
+def plot_scatter(df,x,y):
+    beta = regression(df[x],df[y],False).params
+    fig , ax = plt.subplots(figsize=(8,6))
+    df.plot.scatter(x=x,y=y,ax=ax,fontsize=12)
+    minv,maxv = df[[x,y]].min().min(),df[[x,y]].max().max()
+    ax.plot([minv,maxv],[minv,maxv],'r',lw=.8)
+    plt.title('Market beta {:.2f}'.format(beta.values[0]))
+    return fig    
+
+def plot_environment(df,per_column):
+    '''
+    Environment Analysis plot for the alpha with the bechmark
+    per_column is the name with of column which has bmrk daily return    
+    '''
+    
+    df['Quintile'] = pd.qcut(df[per_column],5,labels=[1,2,3,4,5])
+    f , ax = plt.subplots(figsize=(8,6))
+    (df.groupby('Quintile').mean()).plot.bar(grid=True,rot=0,ax=ax,fontsize=12).set(title='Env Analysis')
+    return f
+    
+    
+def pysimulate(_alpha,neutralize,_return=RETURN):
+    '''
+    Main Function which simulates the strategy
+    '''
+    
+    # TODO: Add functionality to make it custom
+    ## have neutralization # or not have neutralization
+    ## have rank or not have rank
+    ## SCALE is a pre-requestie
+    ## make it optional to have market comparison 
+    alpha = SCALE(INDNEUTRALIZE(RANK(_alpha),neutralize)).shift()
+#     return alpha
+    returns = _return
+    alpha = alpha.loc[returns.index.min():]
+    min_date = alpha[alpha.count(1)>1500].index.min() 
+    daily_returns = alpha_daily_return(alpha.loc[min_date:],returns.loc[min_date:]) - RFR['RFR'].loc[min_date:] ## GLobal
+#     dft = pd.concat([daily_returns,NIFTY],axis=1,keys=['Alpha','Nifty'])
+#     f1 = plot_scatter(dft,'Nifty','Alpha')
+#     f2 = plot_environment(dft,'Nifty')
+#     return daily_returns
+    plot_return_sharpe_cumsum(daily_returns)
+    #((return_statistics(daily_returns)*100))
+    return generate_stats_table(daily_returns,returns.loc[min_date:],alpha.loc[min_date:])
+
+
+# UNDER TESTING!!
+def _pysimulate(settings):
+    '''
+    Main Function which simulates the strategy.
+    
+    Parameters
+    --------------------------
+    --------------------------
+    
+    settings : dict , the python dict which contains the 
+               settings which we wish to apply to the 
+               simulation
+               
+    Example
+    --------------------------
+    --------------------------
+    
+    settings = { 'Rank' : True/False , 
+                 'Neutralize':'Market/Industry/None',
+                 'return':RETURN,
+                 'Alpha':alpha_expression} 
+    
+    Note
+    ------------------------------
+    ------------------------------
+   The order in which these operations will be
+   applied are Rank >- Neutralization >- SCALE 
+   Scaling will be applied by default.
+               
+    '''
+    
+    if not ('Rank' in settings and 'Neutralize' in settings and 'return' in settings and 'Alpha' in settings):
+         return 'Settings missing for simulation'
+    
+    _alpha = settings['Alpha']
+    
+    if settings['Rank']: 
+        _alpha = RANK(_alpha) 
+        
+    if settings['Neutralize']=='Market': 
+        _alpha = INDNEUTRALIZE(RANK(_alpha),1)
+
+    if settings['Neutralize']=='Industry': 
+        _alpha = INDNEUTRALIZE(RANK(_alpha),2)
+
+    _alpha = SCALE(_alpha) # scaling is a default operation
+    
+    alpha = _alpha.shift().copy()
+    
+    returns = settings['return']
+    
+    daily_returns = alpha_daily_return(alpha,returns)
+    
+    dft = pd.concat([daily_returns,NIFTY],axis=1,keys=['Alpha','Nifty'])
+#     f1 = plot_scatter(dft,'Nifty','Alpha')
+    f1 = sns.regplot(x='Nifty',y='Alpha',data=dft)
+    f2 = plot_environment(dft,'Nifty')
+#     return daily_returns
+    plot_return_sharpe_cumsum(daily_returns)
+    return ((return_statistics(daily_returns)*100)) ,((generate_stats_table(daily_returns,returns,alpha)))
+
+
+# '''
+# Things needed to be added:
+
+# 1. Create 5 quinitles for the alpha
+# 2. All long only portfolios
+# 3. Plot their Cumulative Return
+# 4. Plot their IC (cross sectional)
+#    Daily 
+#    Rolling yearly
+# 5. Genrate 
+#  YEAR | Portfolio No.| Return | Factor Beta | Intercept |
+#       | -------------|--------|------------ |---------  |
+ 
+#  return  = intercept + factor_beta * return_for_portfolio
+ 
+#  ## we would want intercept to be highly negative for portfolio 5
+#  ## Do this for each year for each portfolio
+
+# '''
