@@ -1,2 +1,2 @@
 # AlgoTrading
-Backtest Strategies using BackTrader
+Backtest Reversal Strategies using BackTrader
